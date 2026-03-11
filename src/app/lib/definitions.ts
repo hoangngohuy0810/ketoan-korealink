@@ -1,3 +1,11 @@
+export type InvoiceItem = {
+  description: string;
+  unit?: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+};
+
 export type Transaction = {
   id: string;
   date: string; // YYYY-MM-DD
@@ -9,6 +17,26 @@ export type Transaction = {
   totalAmount: number;
   notes?: string;
   pdfDataUri?: string;
+
+  // New detailed fields from invoice
+  invoiceSymbol?: string;
+  invoiceForm?: string;
+  invoiceLookupCode?: string;
+  
+  senderName?: string;
+  senderAddress?: string;
+  senderTaxId?: string;
+  senderAccountNumber?: string;
+
+  recipientName?: string;
+  recipientAddress?: string;
+  recipientTaxId?: string;
+
+  paymentMethod?: string;
+  items?: InvoiceItem[];
+  vatRate?: string;
+  totalAmountInWords?: string;
+  currency?: string;
 };
 
 export type CompanyInfo = {
@@ -20,15 +48,32 @@ export type CompanyInfo = {
 };
 
 export type ExtractedData = {
+  invoiceSymbol?: string;
+  invoiceForm?: string;
   invoiceNumber: string;
   invoiceDate: string;
-  recipientName: string;
+  invoiceLookupCode?: string;
+
   senderName: string;
-  totalAmount: number;
-  taxAmount: number;
+  senderAddress: string;
+  senderTaxId: string;
+  senderAccountNumber?: string;
+
+  recipientName: string;
+  recipientAddress: string;
+  recipientTaxId?: string;
+
+  paymentMethod?: string;
+  items: InvoiceItem[];
   subtotal: number;
-  pdfDataUri: string;
+  vatRate?: string;
+  taxAmount: number;
+  totalAmount: number;
+  totalAmountInWords?: string;
+  currency: string;
+  
   notes?: string;
+  pdfDataUri: string;
 };
 
 export type StatementTransaction = {

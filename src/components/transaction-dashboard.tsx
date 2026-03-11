@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   Settings,
+  Trash2,
   UploadCloud,
   X,
 } from 'lucide-react';
@@ -28,9 +29,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
 import { extractInvoiceAction, reconcileStatementAction, validateTransactionAction } from '@/app/actions';
-import { type ExtractPdfInvoiceDataOutput } from '@/ai/flows/extract-pdf-invoice-data';
 import { Logo } from '@/components/icons';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
@@ -193,15 +194,8 @@ export default function TransactionDashboard() {
             const transactionType = aiData.recipientName.toLowerCase().includes(companyInfo.name.toLowerCase()) ? 'income' : 'expense';
 
             const extracted: ExtractedData = {
-              invoiceNumber: aiData.invoiceNumber,
-              invoiceDate: aiData.invoiceDate,
-              senderName: aiData.senderName,
-              recipientName: aiData.recipientName,
-              totalAmount: aiData.totalAmount,
-              taxAmount: aiData.taxAmount,
-              subtotal: aiData.subtotal,
+              ...aiData,
               pdfDataUri: pdfDataUri,
-              notes: aiData.notes,
             };
             setExtractedData(extracted);
 
@@ -397,6 +391,12 @@ export default function TransactionDashboard() {
     setIsCompanyInfoOpen(false);
     toast({ title: 'Thành công', description: 'Đã cập nhật thông tin doanh nghiệp.' });
   };
+
+  const handleResetLedger = () => {
+    setTransactions([]);
+    toast({ title: 'Hoàn tất', description: 'Sổ sách của bạn đã được reset.' });
+    setIsCompanyInfoOpen(false);
+  };
   
   const onReconDialogOpenChange = (open: boolean) => {
     if (!open) {
@@ -421,23 +421,42 @@ export default function TransactionDashboard() {
         vatAmount: 0,
         totalAmount: 0,
         notes: '',
+        transactionType: 'expense',
       });
     }
     setIsFormSheetOpen(true);
   };
 
   const handleSaveTransaction = (values: z.infer<typeof transactionSchema>) => {
-    const newTransaction: Transaction = {
-      ...values,
-      id: values.id || new Date().toISOString(),
-      date: format(values.date, 'yyyy-MM-dd'),
-    };
-    if (values.id) {
-      setTransactions(transactions.map((t) => (t.id === values.id ? newTransaction : t)));
-      toast({ title: 'Thành công', description: 'Đã cập nhật giao dịch.' });
+    const isEditing = !!values.id;
+
+    if (isEditing) {
+        const originalTransaction = transactions.find(t => t.id === values.id);
+        const newTransaction: Transaction = {
+            ...(originalTransaction as Transaction), // preserve all the detailed fields
+            ...values, // overwrite with edited fields
+            id: values.id,
+            date: format(values.date, 'yyyy-MM-dd'),
+        };
+        setTransactions(transactions.map((t) => (t.id === values.id ? newTransaction : t)));
+        toast({ title: 'Thành công', description: 'Đã cập nhật giao dịch.' });
     } else {
-      setTransactions([newTransaction, ...transactions]);
-      toast({ title: 'Thành công', description: 'Đã thêm giao dịch mới.' });
+        const newTransaction: Transaction = {
+          id: new Date().toISOString(),
+          date: format(values.date, 'yyyy-MM-dd'),
+          invoiceNumber: values.invoiceNumber,
+          counterpartyName: values.counterpartyName,
+          transactionType: values.transactionType,
+          netAmount: values.netAmount,
+          vatAmount: values.vatAmount,
+          totalAmount: values.totalAmount,
+          notes: values.notes,
+          pdfDataUri: values.pdfDataUri,
+          items: [],
+          currency: 'VND',
+        };
+        setTransactions([newTransaction, ...transactions]);
+        toast({ title: 'Thành công', description: 'Đã thêm giao dịch mới.' });
     }
     setIsFormSheetOpen(false);
   };
@@ -448,11 +467,25 @@ export default function TransactionDashboard() {
   };
 
   const handleConfirmExtraction = (values: z.infer<typeof transactionSchema>) => {
+    if (!extractedData) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không tìm thấy dữ liệu đã trích xuất.' });
+      return;
+    }
+    
+    const { subtotal, ...restOfExtractedData } = extractedData;
+
     const newTransaction: Transaction = {
+      ...restOfExtractedData,
       ...values,
       id: new Date().toISOString(),
-      date: format(values.date, 'yyyy-MM-dd'),
+      date: format(values.date, "yyyy-MM-dd"),
+      netAmount: values.netAmount,
+      items: extractedData.items,
+      currency: extractedData.currency,
+      senderName: extractedData.senderName,
+      recipientName: extractedData.recipientName,
     };
+    
     setTransactions([newTransaction, ...transactions]);
     toast({ title: 'Thành công', description: 'Đã lưu giao dịch từ hoá đơn.' });
     setIsReviewSheetOpen(false);
@@ -669,6 +702,28 @@ export default function TransactionDashboard() {
                   </DialogFooter>
                 </form>
               </Form>
+              <div className="border-t pt-6 mt-6">
+                <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                        <Button variant="destructive" className="w-full">
+                            <Trash2 className="mr-2 h-4 w-4" /> Reset sổ sách
+                        </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Bạn có chắc chắn không?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                Hành động này sẽ xóa vĩnh viễn tất cả các giao dịch đã ghi.
+                                Thông tin doanh nghiệp sẽ được giữ lại. Bạn không thể hoàn tác hành động này.
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Huỷ</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleResetLedger}>Tiếp tục</AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
+              </div>
             </DialogContent>
           </Dialog>
         </div>
@@ -739,6 +794,7 @@ export default function TransactionDashboard() {
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
+                    id="date"
                     variant={"outline"}
                     className={cn(
                       "w-full sm:w-[240px] justify-start text-left font-normal",
@@ -768,6 +824,7 @@ export default function TransactionDashboard() {
                     onSelect={setDateRange}
                     numberOfMonths={2}
                     locale={vi}
+                    showOutsideDays={false}
                   />
                 </PopoverContent>
               </Popover>
@@ -1029,5 +1086,3 @@ export default function TransactionDashboard() {
     </div>
   );
 }
-
-    
