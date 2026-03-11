@@ -30,6 +30,7 @@ import { z } from 'zod';
 
 import { extractInvoiceAction, reconcileStatementAction, validateTransactionAction } from '@/app/actions';
 import { Logo } from '@/components/icons';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
@@ -348,6 +349,7 @@ export default function TransactionDashboard() {
   }, [filteredTransactions, sortConfig]);
 
   const periodSummary = React.useMemo(() => {
+    if (!isClient) return { totalIncome: 0, totalExpense: 0 };
     return filteredTransactions.reduce(
       (acc, t) => {
         if (t.transactionType === 'income') {
@@ -359,7 +361,7 @@ export default function TransactionDashboard() {
       },
       { totalIncome: 0, totalExpense: 0 }
     );
-  }, [filteredTransactions]);
+  }, [isClient, filteredTransactions]);
 
   const currentBalance = React.useMemo(() => {
     if (!isClient) return 0;
@@ -957,16 +959,16 @@ export default function TransactionDashboard() {
       
       {/* Sheets */}
       <Sheet open={isFormSheetOpen} onOpenChange={setIsFormSheetOpen}>
-        <SheetContent className="sm:max-w-lg">
+        <SheetContent className="sm:max-w-2xl w-full">
           <Form {...transactionForm}>
             <form onSubmit={transactionForm.handleSubmit(handleSaveTransaction)} className="flex flex-col h-full">
               <SheetHeader>
                 <SheetTitle>{editingTransaction ? 'Chỉnh sửa giao dịch' : 'Thêm giao dịch thủ công'}</SheetTitle>
                 <SheetDescription>
-                  {editingTransaction ? 'Cập nhật chi tiết cho giao dịch này.' : 'Điền thông tin cho giao dịch mới.'}
+                  {editingTransaction ? 'Cập nhật và xem chi tiết giao dịch này.' : 'Điền thông tin cho giao dịch mới.'}
                 </SheetDescription>
               </SheetHeader>
-              <div className="flex-grow overflow-y-auto p-1 -mx-1 pr-2 mt-4 space-y-4">
+              <div className="flex-grow overflow-y-auto p-1 -mx-1 pr-4 mt-4 space-y-4">
                 <FormField control={transactionForm.control} name="date" render={({ field }) => (
                     <FormItem className="flex flex-col">
                       <FormLabel>Ngày giao dịch</FormLabel>
@@ -1011,6 +1013,87 @@ export default function TransactionDashboard() {
                  <FormField control={transactionForm.control} name="notes" render={({ field }) => (
                     <FormItem><FormLabel>Ghi chú</FormLabel><FormControl><Textarea {...field} /></FormControl><FormMessage /></FormItem>
                  )}/>
+
+                {editingTransaction && editingTransaction.pdfDataUri && (
+                  <Accordion type="single" collapsible className="w-full pt-4 border-t">
+                    <AccordionItem value="invoice-details">
+                      <AccordionTrigger className="text-base font-semibold">
+                        Xem chi tiết hoá đơn gốc
+                      </AccordionTrigger>
+                      <AccordionContent className="space-y-6 pt-4 text-sm">
+                        {/* Invoice Header Details */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          <div><p className="font-medium">Ký hiệu HĐ</p><p className="text-muted-foreground">{editingTransaction.invoiceSymbol || 'N/A'}</p></div>
+                          <div><p className="font-medium">Mẫu số HĐ</p><p className="text-muted-foreground">{editingTransaction.invoiceForm || 'N/A'}</p></div>
+                          <div><p className="font-medium">Mã tra cứu</p><p className="text-muted-foreground break-all">{editingTransaction.invoiceLookupCode || 'N/A'}</p></div>
+                        </div>
+
+                        {/* Sender and Recipient */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                          <div className="space-y-2">
+                            <h4 className="font-semibold">Bên bán</h4>
+                            <p className="font-medium">{editingTransaction.senderName}</p>
+                            <p><span className="text-muted-foreground">MST:</span> {editingTransaction.senderTaxId}</p>
+                            <p><span className="text-muted-foreground">Địa chỉ:</span> {editingTransaction.senderAddress}</p>
+                            {editingTransaction.senderAccountNumber && <p><span className="text-muted-foreground">STK:</span> {editingTransaction.senderAccountNumber}</p>}
+                          </div>
+                          <div className="space-y-2">
+                            <h4 className="font-semibold">Bên mua</h4>
+                            <p className="font-medium">{editingTransaction.recipientName}</p>
+                            {editingTransaction.recipientTaxId && <p><span className="text-muted-foreground">MST:</span> {editingTransaction.recipientTaxId}</p>}
+                            <p><span className="text-muted-foreground">Địa chỉ:</span> {editingTransaction.recipientAddress}</p>
+                          </div>
+                        </div>
+
+                        {/* Items Table */}
+                        <div>
+                          <h4 className="font-semibold mb-2">Hàng hoá, dịch vụ</h4>
+                          <div className="border rounded-md">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="p-2">#</TableHead>
+                                  <TableHead className="p-2">Tên</TableHead>
+                                  <TableHead className="text-right p-2">SL</TableHead>
+                                  <TableHead className="text-right p-2">Đơn giá</TableHead>
+                                  <TableHead className="text-right p-2">Thành tiền</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {editingTransaction.items && editingTransaction.items.length > 0 ? (
+                                  editingTransaction.items.map((item, index) => (
+                                    <TableRow key={index}>
+                                      <TableCell className="p-2">{index + 1}</TableCell>
+                                      <TableCell className="p-2">{item.description}</TableCell>
+                                      <TableCell className="text-right p-2">{item.quantity}</TableCell>
+                                      <TableCell className="text-right p-2">{formatCurrency(item.unitPrice, editingTransaction.currency)}</TableCell>
+                                      <TableCell className="text-right p-2">{formatCurrency(item.lineTotal, editingTransaction.currency)}</TableCell>
+                                    </TableRow>
+                                  ))
+                                ) : (
+                                  <TableRow><TableCell colSpan={5} className="text-center p-4">Không có chi tiết hàng hoá.</TableCell></TableRow>
+                                )}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                        
+                        {/* Totals */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <p><span className="font-medium">HT thanh toán:</span> {editingTransaction.paymentMethod || 'N/A'}</p>
+                                {editingTransaction.totalAmountInWords && <p><span className="font-medium">Bằng chữ:</span> {editingTransaction.totalAmountInWords}</p>}
+                            </div>
+                            <div className="space-y-1 text-right">
+                                <p>Cộng tiền hàng: <span className="font-semibold">{formatCurrency(editingTransaction.netAmount, editingTransaction.currency)}</span></p>
+                                <p>Thuế GTGT ({editingTransaction.vatRate || 'N/A'}): <span className="font-semibold">{formatCurrency(editingTransaction.vatAmount, editingTransaction.currency)}</span></p>
+                                <p className="text-base font-bold">Tổng thanh toán: <span className="font-semibold">{formatCurrency(editingTransaction.totalAmount, editingTransaction.currency)}</span></p>
+                            </div>
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  </Accordion>
+                )}
               </div>
               <SheetFooter className="pt-4">
                 <SheetClose asChild><Button type="button" variant="outline">Huỷ</Button></SheetClose>
