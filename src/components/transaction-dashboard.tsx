@@ -102,6 +102,7 @@ export default function TransactionDashboard() {
   const [validationIssues, setValidationIssues] = React.useState<string[]>([]);
   const [viewingPdf, setViewingPdf] = React.useState<string | undefined>(undefined);
   const [isDragging, setIsDragging] = React.useState(false);
+  const [fileQueue, setFileQueue] = React.useState<File[]>([]);
 
   // Forms
   const companyForm = useForm<z.infer<typeof companyInfoSchema>>({
@@ -125,6 +126,85 @@ export default function TransactionDashboard() {
   React.useEffect(() => {
     companyForm.reset(companyInfo);
   }, [companyInfo, companyForm]);
+
+  React.useEffect(() => {
+    if (fileQueue.length > 0 && !isProcessing && !isReviewSheetOpen && !isFormSheetOpen) {
+      const fileToProcess = fileQueue[0];
+
+      const processNextFile = async () => {
+        if (!companyInfo.name) {
+          toast({ variant: 'destructive', title: 'Lỗi', description: 'Vui lòng thiết lập thông tin doanh nghiệp trước.' });
+          setFileQueue([]); // Clear queue on config error
+          return;
+        }
+
+        setIsProcessing(true);
+        try {
+          const pdfDataUri = await fileToDataUri(fileToProcess);
+          const result = await extractInvoiceAction({ pdfDataUri });
+
+          if (result.success) {
+            const aiData = result.data;
+            const transactionType = aiData.recipientName.toLowerCase().includes(companyInfo.name.toLowerCase()) ? 'income' : 'expense';
+
+            const extracted: ExtractedData = {
+              invoiceNumber: aiData.invoiceNumber,
+              invoiceDate: aiData.invoiceDate,
+              senderName: aiData.senderName,
+              recipientName: aiData.recipientName,
+              totalAmount: aiData.totalAmount,
+              taxAmount: aiData.taxAmount,
+              subtotal: aiData.subtotal,
+              pdfDataUri: pdfDataUri,
+              notes: aiData.notes,
+            };
+            setExtractedData(extracted);
+
+            const validationInput = {
+              transactionDate: aiData.invoiceDate,
+              invoiceNumber: aiData.invoiceNumber,
+              counterpartyName: transactionType === 'income' ? aiData.senderName : aiData.recipientName,
+              totalAmount: aiData.totalAmount,
+              vatAmount: aiData.taxAmount,
+              netAmount: aiData.subtotal,
+              transactionType: transactionType,
+            };
+
+            const validationResult = await validateTransactionAction(validationInput);
+            const date = parse(aiData.invoiceDate, 'yyyy-MM-dd', new Date());
+
+            reviewForm.reset({
+              date: isValid(date) ? date : new Date(),
+              invoiceNumber: aiData.invoiceNumber,
+              counterpartyName: transactionType === 'income' ? aiData.senderName : aiData.recipientName,
+              netAmount: aiData.subtotal,
+              vatAmount: aiData.taxAmount,
+              totalAmount: aiData.totalAmount,
+              transactionType: transactionType,
+              notes: aiData.notes,
+              pdfDataUri: pdfDataUri,
+            });
+
+            if (validationResult.success && validationResult.data.hasInconsistencies) {
+              setValidationIssues(validationResult.data.inconsistencies);
+            } else {
+              setValidationIssues([]);
+            }
+            setIsReviewSheetOpen(true);
+          } else {
+            toast({ variant: 'destructive', title: `Lỗi xử lý ${fileToProcess.name}`, description: result.error });
+          }
+        } catch (error) {
+          toast({ variant: 'destructive', title: `Lỗi xử lý ${fileToProcess.name}`, description: 'Không thể xử lý tệp PDF.' });
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      setFileQueue(q => q.slice(1));
+      processNextFile();
+    }
+  }, [fileQueue, isProcessing, isReviewSheetOpen, isFormSheetOpen, companyInfo.name, reviewForm, toast]);
 
   // Derived State
   const filteredTransactions = React.useMemo(() => {
@@ -207,76 +287,9 @@ export default function TransactionDashboard() {
     setIsFormSheetOpen(false);
   };
 
-  const handleProcessFiles = async (files: FileList | null) => {
+  const handleProcessFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    if (!companyInfo.name) {
-      toast({ variant: 'destructive', title: 'Lỗi', description: 'Vui lòng thiết lập thông tin doanh nghiệp trước.' });
-      return;
-    }
-    setIsProcessing(true);
-    const file = files[0];
-    try {
-      const pdfDataUri = await fileToDataUri(file);
-      const result = await extractInvoiceAction({ pdfDataUri });
-
-      if (result.success) {
-        const aiData = result.data;
-        const transactionType = aiData.recipientName.toLowerCase().includes(companyInfo.name.toLowerCase()) ? 'income' : 'expense';
-        
-        const extracted: ExtractedData = {
-          invoiceNumber: aiData.invoiceNumber,
-          invoiceDate: aiData.invoiceDate,
-          senderName: aiData.senderName,
-          recipientName: aiData.recipientName,
-          totalAmount: aiData.totalAmount,
-          taxAmount: aiData.taxAmount,
-          subtotal: aiData.subtotal,
-          pdfDataUri: pdfDataUri,
-          notes: aiData.notes,
-        };
-        setExtractedData(extracted);
-        
-        const validationInput = {
-          transactionDate: aiData.invoiceDate,
-          invoiceNumber: aiData.invoiceNumber,
-          counterpartyName: transactionType === 'income' ? aiData.senderName : aiData.recipientName,
-          totalAmount: aiData.totalAmount,
-          vatAmount: aiData.taxAmount,
-          netAmount: aiData.subtotal,
-          transactionType: transactionType,
-        }
-
-        const validationResult = await validateTransactionAction(validationInput);
-
-        const date = parse(aiData.invoiceDate, 'yyyy-MM-dd', new Date());
-
-        reviewForm.reset({
-          date: isValid(date) ? date : new Date(),
-          invoiceNumber: aiData.invoiceNumber,
-          counterpartyName: transactionType === 'income' ? aiData.senderName : aiData.recipientName,
-          netAmount: aiData.subtotal,
-          vatAmount: aiData.taxAmount,
-          totalAmount: aiData.totalAmount,
-          transactionType: transactionType,
-          notes: aiData.notes,
-          pdfDataUri: pdfDataUri,
-        });
-
-        if (validationResult.success && validationResult.data.hasInconsistencies) {
-          setValidationIssues(validationResult.data.inconsistencies);
-        } else {
-          setValidationIssues([]);
-        }
-        setIsReviewSheetOpen(true);
-
-      } else {
-        toast({ variant: 'destructive', title: 'Lỗi trích xuất', description: result.error });
-      }
-    } catch (error) {
-      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể xử lý tệp PDF.' });
-    } finally {
-      setIsProcessing(false);
-    }
+    setFileQueue(q => [...q, ...Array.from(files)]);
   };
 
   const handleConfirmExtraction = (values: z.infer<typeof transactionSchema>) => {
@@ -346,15 +359,16 @@ export default function TransactionDashboard() {
             accept="application/pdf"
             onChange={(e) => handleProcessFiles(e.target.files)}
             disabled={isProcessing}
+            multiple
           />
           <Button asChild variant="outline" disabled={isProcessing}>
             <label htmlFor="pdf-upload" className="cursor-pointer">
-              {isProcessing ? (
+              {isProcessing && fileQueue.length === 0 ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <UploadCloud className="mr-2 h-4 w-4" />
               )}
-              Tải lên hoá đơn
+              Tải lên hoá đơn {fileQueue.length > 0 && `(${fileQueue.length} đang chờ)`}
             </label>
           </Button>
           <Button onClick={() => handleOpenFormSheet(null)}>
