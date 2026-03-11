@@ -1,1 +1,5 @@
-// Flows will be imported for their side effects in this file.
+import { config } from 'dotenv';
+config();
+
+import '@/ai/flows/extract-pdf-invoice-data.ts';
+import '@/ai/flows/validate-extracted-transaction-data.ts';
