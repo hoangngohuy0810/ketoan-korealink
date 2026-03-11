@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -56,6 +55,7 @@ import { formatCurrency, cn, fileToDataUri } from '@/lib/utils';
 import { Logo } from '@/components/icons';
 import { extractInvoiceAction, validateTransactionAction } from '@/app/actions';
 import { type ExtractPdfInvoiceDataOutput } from '@/ai/flows/extract-pdf-invoice-data';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const COMPANY_INFO_KEY = 'nhat-ky-thu-chi-company-info';
 const TRANSACTIONS_KEY = 'nhat-ky-thu-chi-transactions';
@@ -89,6 +89,7 @@ export default function TransactionDashboard() {
   const [transactions, setTransactions] = useLocalStorage<Transaction[]>(TRANSACTIONS_KEY, []);
 
   // State
+  const [isClient, setIsClient] = React.useState(false);
   const [searchTerm, setSearchTerm] = React.useState('');
   const [filterType, setFilterType] = React.useState<'all' | 'income' | 'expense'>('all');
   const [dateRange, setDateRange] = React.useState<DateRange | undefined>();
@@ -117,6 +118,10 @@ export default function TransactionDashboard() {
     resolver: zodResolver(transactionSchema),
   });
 
+  React.useEffect(() => {
+    setIsClient(true);
+  }, []);
+  
   React.useEffect(() => {
     if (companyInfo && !companyInfo.name && transactions.length === 0) {
       setIsCompanyInfoOpen(true);
@@ -446,7 +451,11 @@ export default function TransactionDashboard() {
             <span className="text-green-500">▲</span>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(summary.totalIncome)}</div>
+            {isClient ? (
+              <div className="text-2xl font-bold">{formatCurrency(summary.totalIncome)}</div>
+            ) : (
+              <Skeleton className="h-8 w-3/4" />
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -455,7 +464,11 @@ export default function TransactionDashboard() {
             <span className="text-red-500">▼</span>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(summary.totalExpense)}</div>
+            {isClient ? (
+              <div className="text-2xl font-bold">{formatCurrency(summary.totalExpense)}</div>
+            ) : (
+              <Skeleton className="h-8 w-3/4" />
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -464,7 +477,11 @@ export default function TransactionDashboard() {
             <span className="text-muted-foreground">=</span>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(summary.totalIncome - summary.totalExpense)}</div>
+            {isClient ? (
+              <div className="text-2xl font-bold">{formatCurrency(summary.totalIncome - summary.totalExpense)}</div>
+            ) : (
+              <Skeleton className="h-8 w-3/4" />
+            )}
           </CardContent>
         </Card>
       </div>
@@ -562,7 +579,21 @@ export default function TransactionDashboard() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredTransactions.length > 0 ? (
+                {!isClient ? (
+                   Array.from({ length: 5 }).map((_, i) => (
+                    <TableRow key={i} className="pointer-events-none">
+                      <TableCell><Skeleton className="h-4 w-[70px]" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-[90px]" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-full max-w-[200px]" /></TableCell>
+                      <TableCell className="text-right"><Skeleton className="h-4 w-[80px] ml-auto" /></TableCell>
+                      <TableCell className="text-right"><Skeleton className="h-4 w-[80px] ml-auto" /></TableCell>
+                      <TableCell className="text-right"><Skeleton className="h-4 w-[80px] ml-auto" /></TableCell>
+                      <TableCell className="text-center">
+                        <Skeleton className="h-6 w-6 mx-auto" />
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : filteredTransactions.length > 0 ? (
                   filteredTransactions.map((t) => (
                     <TableRow
                       key={t.id}
