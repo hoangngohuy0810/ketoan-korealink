@@ -30,6 +30,12 @@ import { z } from 'zod';
 
 import { extractInvoiceAction, reconcileStatementAction, validateTransactionAction } from '@/app/actions';
 import { Logo } from '@/components/icons';
+import { 
+  getTransactions, 
+  saveTransaction, 
+  updateTransaction, 
+  resetLedger 
+} from '@/lib/transaction-service';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
@@ -66,8 +72,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { cn, fileToDataUri, formatCurrency } from '@/lib/utils';
 
-const COMPANY_INFO_KEY = 'nhat-ky-thu-chi-company-info';
-const TRANSACTIONS_KEY = 'nhat-ky-thu-chi-transactions';
+const FIXED_COMPANY_INFO: CompanyInfo = {
+  name: 'CÔNG TY CỔ PHẦN KẾT NỐI TRI THỨC TRẺ',
+  taxId: '2901970328',
+  abbreviation: 'TRI THỨC TRẺ',
+  openingBalance: 0,
+  openingBalanceDate: '2024-01-01',
+};
+const ADDRESS_TAX = 'Số B12-15, đường số 5, khu đô thị TECCO Nghi Phú, Phường Vinh Phú, Tỉnh Nghệ An, Việt Nam';
 
 const transactionSchema = z.object({
   id: z.string().optional(),
@@ -94,14 +106,9 @@ type SortableColumn = 'date' | 'invoiceNumber' | 'counterpartyName' | 'netAmount
 
 export default function TransactionDashboard() {
   const { toast } = useToast();
-  const [companyInfo, setCompanyInfo] = useLocalStorage<CompanyInfo>(COMPANY_INFO_KEY, {
-    name: '',
-    taxId: '',
-    abbreviation: '',
-    openingBalance: 0,
-    openingBalanceDate: new Date(new Date().getFullYear(), 0, 1).toISOString(), // Jan 1st of current year
-  });
-  const [transactions, setTransactions] = useLocalStorage<Transaction[]>(TRANSACTIONS_KEY, []);
+  const [companyInfo] = React.useState<CompanyInfo>(FIXED_COMPANY_INFO);
+  const [transactions, setTransactions] = React.useState<Transaction[]>([]);
+  const [loading, setLoading] = React.useState(true);
 
   // State
   const [isClient, setIsClient] = React.useState(false);
@@ -159,10 +166,21 @@ export default function TransactionDashboard() {
   }, []);
   
   React.useEffect(() => {
-    if (isClient && companyInfo && !companyInfo.name && transactions.length === 0) {
-      setIsCompanyInfoOpen(true);
+    async function loadData() {
+      try {
+        const data = await getTransactions();
+        setTransactions(data);
+      } catch (error) {
+        console.error('Error loading transactions:', error);
+        toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể tải dữ liệu từ server.' });
+      } finally {
+        setLoading(false);
+      }
     }
-  }, [isClient, companyInfo, transactions.length]);
+    if (isClient) {
+      loadData();
+    }
+  }, [isClient, toast]);
 
   React.useEffect(() => {
     if (isClient) {
@@ -394,10 +412,18 @@ export default function TransactionDashboard() {
     toast({ title: 'Thành công', description: 'Đã cập nhật thông tin doanh nghiệp.' });
   };
 
-  const handleResetLedger = () => {
-    setTransactions([]);
-    toast({ title: 'Hoàn tất', description: 'Sổ sách của bạn đã được reset.' });
-    setIsCompanyInfoOpen(false);
+  const handleResetLedger = async () => {
+    setIsProcessing(true);
+    try {
+      await resetLedger();
+      setTransactions([]);
+      toast({ title: 'Hoàn tất', description: 'Toàn bộ sổ sách và hóa đơn đã được xóa khỏi hệ thống.' });
+      setIsCompanyInfoOpen(false);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể reset sổ sách.' });
+    } finally {
+      setIsProcessing(false);
+    }
   };
   
   const onReconDialogOpenChange = (open: boolean) => {
@@ -429,38 +455,47 @@ export default function TransactionDashboard() {
     setIsFormSheetOpen(true);
   };
 
-  const handleSaveTransaction = (values: z.infer<typeof transactionSchema>) => {
+  const handleSaveTransaction = async (values: z.infer<typeof transactionSchema>) => {
     const isEditing = !!values.id;
+    setIsProcessing(true);
 
-    if (isEditing) {
-        const originalTransaction = transactions.find(t => t.id === values.id);
-        const newTransaction: Transaction = {
-            ...(originalTransaction as Transaction), // preserve all the detailed fields
-            ...values, // overwrite with edited fields
-            id: values.id,
+    try {
+      if (isEditing) {
+          const originalTransaction = transactions.find(t => t.id === values.id);
+          const updates = {
+            ...values,
             date: format(values.date, 'yyyy-MM-dd'),
-        };
-        setTransactions(transactions.map((t) => (t.id === values.id ? newTransaction : t)));
-        toast({ title: 'Thành công', description: 'Đã cập nhật giao dịch.' });
-    } else {
-        const newTransaction: Transaction = {
-          id: new Date().toISOString(),
-          date: format(values.date, 'yyyy-MM-dd'),
-          invoiceNumber: values.invoiceNumber,
-          counterpartyName: values.counterpartyName,
-          transactionType: values.transactionType,
-          netAmount: values.netAmount,
-          vatAmount: values.vatAmount,
-          totalAmount: values.totalAmount,
-          notes: values.notes,
-          pdfDataUri: values.pdfDataUri,
-          items: [],
-          currency: 'VND',
-        };
-        setTransactions([newTransaction, ...transactions]);
-        toast({ title: 'Thành công', description: 'Đã thêm giao dịch mới.' });
+          };
+          await updateTransaction(values.id!, updates, values.pdfDataUri);
+          
+          // Refresh local state
+          const updatedData = await getTransactions();
+          setTransactions(updatedData);
+          toast({ title: 'Thành công', description: 'Đã cập nhật giao dịch.' });
+      } else {
+          const newTransaction: Omit<Transaction, 'id'> = {
+            date: format(values.date, 'yyyy-MM-dd'),
+            invoiceNumber: values.invoiceNumber,
+            counterpartyName: values.counterpartyName,
+            transactionType: values.transactionType,
+            netAmount: values.netAmount,
+            vatAmount: values.vatAmount,
+            totalAmount: values.totalAmount,
+            notes: values.notes,
+            items: [],
+            currency: 'VND',
+          };
+          await saveTransaction(newTransaction, values.pdfDataUri);
+          const updatedData = await getTransactions();
+          setTransactions(updatedData);
+          toast({ title: 'Thành công', description: 'Đã thêm giao dịch mới.' });
+      }
+      setIsFormSheetOpen(false);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể lưu giao dịch.' });
+    } finally {
+      setIsProcessing(false);
     }
-    setIsFormSheetOpen(false);
   };
 
   const handleProcessFiles = (files: FileList | null) => {
@@ -468,31 +503,40 @@ export default function TransactionDashboard() {
     setFileQueue(q => [...q, ...Array.from(files)]);
   };
 
-  const handleConfirmExtraction = (values: z.infer<typeof transactionSchema>) => {
+  const handleConfirmExtraction = async (values: z.infer<typeof transactionSchema>) => {
     if (!extractedData) {
       toast({ variant: 'destructive', title: 'Lỗi', description: 'Không tìm thấy dữ liệu đã trích xuất.' });
       return;
     }
     
-    const { subtotal, ...restOfExtractedData } = extractedData;
+    setIsProcessing(true);
+    try {
+      const { subtotal, ...restOfExtractedData } = extractedData;
 
-    const newTransaction: Transaction = {
-      ...restOfExtractedData,
-      ...values,
-      id: new Date().toISOString(),
-      date: format(values.date, "yyyy-MM-dd"),
-      netAmount: values.netAmount,
-      items: extractedData.items,
-      currency: extractedData.currency,
-      senderName: extractedData.senderName,
-      recipientName: extractedData.recipientName,
-    };
-    
-    setTransactions([newTransaction, ...transactions]);
-    toast({ title: 'Thành công', description: 'Đã lưu giao dịch từ hoá đơn.' });
-    setIsReviewSheetOpen(false);
-    setExtractedData(null);
-    setValidationIssues([]);
+      const newTransaction: Omit<Transaction, 'id'> = {
+        ...restOfExtractedData,
+        ...values,
+        date: format(values.date, "yyyy-MM-dd"),
+        netAmount: values.netAmount,
+        items: extractedData.items,
+        currency: extractedData.currency,
+        senderName: extractedData.senderName,
+        recipientName: extractedData.recipientName,
+      };
+      
+      await saveTransaction(newTransaction, values.pdfDataUri);
+      const updatedData = await getTransactions();
+      setTransactions(updatedData);
+      
+      toast({ title: 'Thành công', description: 'Đã lưu giao dịch từ hoá đơn.' });
+      setIsReviewSheetOpen(false);
+      setExtractedData(null);
+      setValidationIssues([]);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể lưu dữ liệu trích xuất.' });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleViewPdf = (pdfDataUri: string | undefined) => {
