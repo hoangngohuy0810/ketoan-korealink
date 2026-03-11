@@ -3,7 +3,11 @@
 import * as React from 'react';
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Banknote,
+  Calendar as CalendarIcon,
   FileText,
   FileUp,
   Filter,
@@ -13,54 +17,52 @@ import {
   Settings,
   UploadCloud,
   X,
-  Calendar as CalendarIcon,
 } from 'lucide-react';
 import { useLocalStorage } from '@/hooks/use-local-storage';
-import type { CompanyInfo, Transaction, ExtractedData, ExtractedStatementData } from '@/app/lib/definitions';
-import { format, parse, isValid } from 'date-fns';
+import type { CompanyInfo, ExtractedData, ExtractedStatementData, Transaction } from '@/app/lib/definitions';
+import { format, isValid, parse } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { type DateRange } from 'react-day-picker';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
+import { extractInvoiceAction, reconcileStatementAction, validateTransactionAction } from '@/app/actions';
+import { type ExtractPdfInvoiceDataOutput } from '@/ai/flows/extract-pdf-invoice-data';
+import { Logo } from '@/components/icons';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  DialogFooter,
-  DialogDescription,
 } from '@/components/ui/dialog';
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-  SheetFooter,
-  SheetClose,
-} from '@/components/ui/sheet';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Calendar } from '@/components/ui/calendar';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Textarea } from '@/components/ui/textarea';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { useToast } from '@/hooks/use-toast';
-import { formatCurrency, cn, fileToDataUri } from '@/lib/utils';
-import { Logo } from '@/components/icons';
-import { extractInvoiceAction, validateTransactionAction, reconcileStatementAction } from '@/app/actions';
-import { type ExtractPdfInvoiceDataOutput } from '@/ai/flows/extract-pdf-invoice-data';
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import { useToast } from '@/hooks/use-toast';
+import { cn, fileToDataUri, formatCurrency } from '@/lib/utils';
 
 const COMPANY_INFO_KEY = 'nhat-ky-thu-chi-company-info';
 const TRANSACTIONS_KEY = 'nhat-ky-thu-chi-transactions';
@@ -85,6 +87,8 @@ const companyInfoSchema = z.object({
   openingBalance: z.coerce.number().default(0),
   openingBalanceDate: z.date({ required_error: 'Vui lòng nhập ngày.' }),
 });
+
+type SortableColumn = 'date' | 'invoiceNumber' | 'counterpartyName' | 'netAmount' | 'vatAmount' | 'totalAmount';
 
 export default function TransactionDashboard() {
   const { toast } = useToast();
@@ -124,6 +128,12 @@ export default function TransactionDashboard() {
     ledgerChange: number;
     discrepancy: number;
   } | null>(null);
+
+  // Sorting state
+  const [sortConfig, setSortConfig] = React.useState<{ key: SortableColumn; direction: 'ascending' | 'descending' }>({
+    key: 'date',
+    direction: 'descending',
+  });
 
 
   // Forms
@@ -318,9 +328,30 @@ export default function TransactionDashboard() {
           t.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase());
 
         return isInDateRange && matchesType && matchesSearch;
-      })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      });
   }, [isClient, transactions, searchTerm, filterType, dateRange]);
+  
+  const sortedTransactions = React.useMemo(() => {
+    const sortableItems = [...filteredTransactions];
+    if (sortConfig) {
+      sortableItems.sort((a, b) => {
+        const aValue = a[sortConfig.key];
+        const bValue = b[sortConfig.key];
+
+        let comparison = 0;
+        if (sortConfig.key === 'date') {
+          comparison = new Date(a.date).getTime() - new Date(b.date).getTime();
+        } else if (typeof aValue === 'number' && typeof bValue === 'number') {
+          comparison = aValue - bValue;
+        } else {
+          comparison = String(aValue).localeCompare(String(bValue));
+        }
+
+        return sortConfig.direction === 'ascending' ? comparison : -comparison;
+      });
+    }
+    return sortableItems;
+  }, [filteredTransactions, sortConfig]);
 
   const periodSummary = React.useMemo(() => {
     return filteredTransactions.reduce(
@@ -349,6 +380,14 @@ export default function TransactionDashboard() {
   }, [isClient, transactions, companyInfo]);
 
   // Handlers
+  const requestSort = (key: SortableColumn) => {
+    let newDirection: 'ascending' | 'descending' = 'ascending';
+    if (sortConfig.key === key) {
+        newDirection = sortConfig.direction === 'ascending' ? 'descending' : 'ascending';
+    }
+    setSortConfig({ key, direction: newDirection });
+  };
+  
   const handleSaveCompanyInfo = (values: z.infer<typeof companyInfoSchema>) => {
     const newInfo = {
       ...values,
@@ -761,13 +800,42 @@ export default function TransactionDashboard() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[120px]">Ngày</TableHead>
-                  <TableHead>Số HĐ</TableHead>
-                  <TableHead>Đối tác</TableHead>
-                  <TableHead className="text-right">Số tiền</TableHead>
-                  <TableHead className="text-right">VAT</TableHead>
-                  <TableHead className="text-right">Tổng cộng</TableHead>
-                  <TableHead className="w-[80px]">Actions</TableHead>
+                  <TableHead className="w-[120px] p-0">
+                    <Button variant="ghost" className="w-full justify-start px-4 font-medium" onClick={() => requestSort('date')}>
+                      Ngày
+                      {sortConfig.key === 'date' ? (sortConfig.direction === 'ascending' ? <ArrowUp className="ml-2 h-4 w-4" /> : <ArrowDown className="ml-2 h-4 w-4" />) : <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />}
+                    </Button>
+                  </TableHead>
+                  <TableHead className="p-0">
+                    <Button variant="ghost" className="w-full justify-start px-4 font-medium" onClick={() => requestSort('invoiceNumber')}>
+                      Số HĐ
+                      {sortConfig.key === 'invoiceNumber' ? (sortConfig.direction === 'ascending' ? <ArrowUp className="ml-2 h-4 w-4" /> : <ArrowDown className="ml-2 h-4 w-4" />) : <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />}
+                    </Button>
+                  </TableHead>
+                  <TableHead className="p-0">
+                     <Button variant="ghost" className="w-full justify-start px-4 font-medium" onClick={() => requestSort('counterpartyName')}>
+                      Đối tác
+                      {sortConfig.key === 'counterpartyName' ? (sortConfig.direction === 'ascending' ? <ArrowUp className="ml-2 h-4 w-4" /> : <ArrowDown className="ml-2 h-4 w-4" />) : <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />}
+                    </Button>
+                  </TableHead>
+                  <TableHead className="p-0">
+                    <Button variant="ghost" className="w-full justify-end px-4 font-medium" onClick={() => requestSort('netAmount')}>
+                      {sortConfig.key === 'netAmount' ? (sortConfig.direction === 'ascending' ? <ArrowUp className="mr-2 h-4 w-4" /> : <ArrowDown className="mr-2 h-4 w-4" />) : <ArrowUpDown className="mr-2 h-4 w-4 opacity-50" />}
+                      Số tiền
+                    </Button>
+                  </TableHead>
+                  <TableHead className="p-0">
+                     <Button variant="ghost" className="w-full justify-end px-4 font-medium" onClick={() => requestSort('vatAmount')}>
+                      {sortConfig.key === 'vatAmount' ? (sortConfig.direction === 'ascending' ? <ArrowUp className="mr-2 h-4 w-4" /> : <ArrowDown className="mr-2 h-4 w-4" />) : <ArrowUpDown className="mr-2 h-4 w-4 opacity-50" />}
+                      VAT
+                    </Button>
+                  </TableHead>
+                  <TableHead className="p-0">
+                    <Button variant="ghost" className="w-full justify-end px-4 font-medium" onClick={() => requestSort('totalAmount')}>
+                      {sortConfig.key === 'totalAmount' ? (sortConfig.direction === 'ascending' ? <ArrowUp className="mr-2 h-4 w-4" /> : <ArrowDown className="mr-2 h-4 w-4" />) : <ArrowUpDown className="mr-2 h-4 w-4 opacity-50" />}
+                      Tổng cộng
+                    </Button>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -780,13 +848,10 @@ export default function TransactionDashboard() {
                       <TableCell className="text-right"><Skeleton className="h-4 w-[80px] ml-auto" /></TableCell>
                       <TableCell className="text-right"><Skeleton className="h-4 w-[80px] ml-auto" /></TableCell>
                       <TableCell className="text-right"><Skeleton className="h-4 w-[80px] ml-auto" /></TableCell>
-                      <TableCell className="text-center">
-                        <Skeleton className="h-6 w-6 mx-auto" />
-                      </TableCell>
                     </TableRow>
                   ))
-                ) : filteredTransactions.length > 0 ? (
-                  filteredTransactions.map((t) => (
+                ) : sortedTransactions.length > 0 ? (
+                  sortedTransactions.map((t) => (
                     <TableRow
                       key={t.id}
                       className={cn(
@@ -796,30 +861,33 @@ export default function TransactionDashboard() {
                       onClick={() => handleOpenFormSheet(t)}
                     >
                       <TableCell>{format(parse(t.date, 'yyyy-MM-dd', new Date()), 'dd/MM/yyyy')}</TableCell>
-                      <TableCell className="font-medium">{t.invoiceNumber}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center justify-between">
+                           <span>{t.invoiceNumber}</span>
+                           {t.pdfDataUri && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleViewPdf(t.pdfDataUri);
+                              }}
+                            >
+                              <FileText className="h-4 w-4 text-primary" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>{t.counterpartyName}</TableCell>
                       <TableCell className="text-right">{formatCurrency(t.netAmount)}</TableCell>
                       <TableCell className="text-right">{formatCurrency(t.vatAmount)}</TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(t.totalAmount)}</TableCell>
-                      <TableCell>
-                        {t.pdfDataUri && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleViewPdf(t.pdfDataUri);
-                            }}
-                          >
-                            <FileText className="h-4 w-4 text-primary" />
-                          </Button>
-                        )}
-                      </TableCell>
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-24 text-center">
+                    <TableCell colSpan={6} className="h-24 text-center">
                       Không có giao dịch nào.
                     </TableCell>
                   </TableRow>
@@ -961,3 +1029,5 @@ export default function TransactionDashboard() {
     </div>
   );
 }
+
+    
