@@ -2,7 +2,10 @@
 
 import * as React from 'react';
 import {
+  AlertCircle,
+  Banknote,
   FileText,
+  FileUp,
   Filter,
   Loader2,
   Plus,
@@ -13,7 +16,7 @@ import {
   Calendar as CalendarIcon,
 } from 'lucide-react';
 import { useLocalStorage } from '@/hooks/use-local-storage';
-import type { CompanyInfo, Transaction, ExtractedData } from '@/app/lib/definitions';
+import type { CompanyInfo, Transaction, ExtractedData, ExtractedStatementData } from '@/app/lib/definitions';
 import { format, parse, isValid } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { type DateRange } from 'react-day-picker';
@@ -21,7 +24,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -53,9 +56,11 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { formatCurrency, cn, fileToDataUri } from '@/lib/utils';
 import { Logo } from '@/components/icons';
-import { extractInvoiceAction, validateTransactionAction } from '@/app/actions';
+import { extractInvoiceAction, validateTransactionAction, reconcileStatementAction } from '@/app/actions';
 import { type ExtractPdfInvoiceDataOutput } from '@/ai/flows/extract-pdf-invoice-data';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 
 const COMPANY_INFO_KEY = 'nhat-ky-thu-chi-company-info';
 const TRANSACTIONS_KEY = 'nhat-ky-thu-chi-transactions';
@@ -77,6 +82,8 @@ const companyInfoSchema = z.object({
   name: z.string().min(1, 'Tên doanh nghiệp không được để trống.'),
   taxId: z.string().min(1, 'Mã số thuế không được để trống.'),
   abbreviation: z.string().min(1, 'Tên viết tắt không được để trống.'),
+  openingBalance: z.coerce.number().default(0),
+  openingBalanceDate: z.date({ required_error: 'Vui lòng nhập ngày.' }),
 });
 
 export default function TransactionDashboard() {
@@ -85,6 +92,8 @@ export default function TransactionDashboard() {
     name: '',
     taxId: '',
     abbreviation: '',
+    openingBalance: 0,
+    openingBalanceDate: new Date(new Date().getFullYear(), 0, 1).toISOString(), // Jan 1st of current year
   });
   const [transactions, setTransactions] = useLocalStorage<Transaction[]>(TRANSACTIONS_KEY, []);
 
@@ -104,11 +113,26 @@ export default function TransactionDashboard() {
   const [viewingPdf, setViewingPdf] = React.useState<string | undefined>(undefined);
   const [isDragging, setIsDragging] = React.useState(false);
   const [fileQueue, setFileQueue] = React.useState<File[]>([]);
+  
+  // New state for reconciliation
+  const [isReconDialogOpen, setIsReconDialogOpen] = React.useState(false);
+  const [isReconciling, setIsReconciling] = React.useState(false);
+  const [reconFile, setReconFile] = React.useState<File | null>(null);
+  const [reconError, setReconError] = React.useState<string | null>(null);
+  const [reconResult, setReconResult] = React.useState<{
+    statement: ExtractedStatementData;
+    ledgerChange: number;
+    discrepancy: number;
+  } | null>(null);
+
 
   // Forms
   const companyForm = useForm<z.infer<typeof companyInfoSchema>>({
     resolver: zodResolver(companyInfoSchema),
-    values: companyInfo,
+    defaultValues: {
+      ...companyInfo,
+      openingBalanceDate: companyInfo.openingBalanceDate ? parse(companyInfo.openingBalanceDate, 'yyyy-MM-dd', new Date()) : new Date(),
+    }
   });
 
   const transactionForm = useForm<z.infer<typeof transactionSchema>>({
@@ -123,14 +147,20 @@ export default function TransactionDashboard() {
   }, []);
   
   React.useEffect(() => {
-    if (companyInfo && !companyInfo.name && transactions.length === 0) {
+    if (isClient && companyInfo && !companyInfo.name && transactions.length === 0) {
       setIsCompanyInfoOpen(true);
     }
-  }, [companyInfo, transactions.length]);
+  }, [isClient, companyInfo, transactions.length]);
 
   React.useEffect(() => {
-    companyForm.reset(companyInfo);
-  }, [companyInfo, companyForm]);
+    if (isClient) {
+        const initialDate = companyInfo.openingBalanceDate ? parse(companyInfo.openingBalanceDate, 'yyyy-MM-dd', new Date()) : new Date();
+        companyForm.reset({
+            ...companyInfo,
+            openingBalanceDate: isValid(initialDate) ? initialDate : new Date(),
+        });
+    }
+  }, [isClient, companyInfo, companyForm]);
 
   React.useEffect(() => {
     if (fileQueue.length > 0 && !isProcessing && !isReviewSheetOpen && !isFormSheetOpen) {
@@ -210,9 +240,65 @@ export default function TransactionDashboard() {
       processNextFile();
     }
   }, [fileQueue, isProcessing, isReviewSheetOpen, isFormSheetOpen, companyInfo.name, reviewForm, toast]);
+  
+  // New useEffect to handle reconciliation file processing
+  React.useEffect(() => {
+    if (!reconFile) return;
+
+    const processReconFile = async () => {
+      setIsReconciling(true);
+      setReconError(null);
+      setReconResult(null);
+
+      try {
+        const fileDataUri = await fileToDataUri(reconFile);
+        const result = await reconcileStatementAction({ fileDataUri });
+
+        if (result.success) {
+          const statementData = result.data;
+          
+          const statementStartDate = parse(statementData.startDate, 'yyyy-MM-dd', new Date());
+          const statementEndDate = parse(statementData.endDate, 'yyyy-MM-dd', new Date());
+
+          if (!isValid(statementStartDate) || !isValid(statementEndDate)) {
+              throw new Error('AI trả về ngày không hợp lệ từ sao kê.');
+          }
+
+          const ledgerChange = transactions
+            .filter(t => {
+                const transDate = parse(t.date, 'yyyy-MM-dd', new Date());
+                return isValid(transDate) && transDate >= statementStartDate && transDate <= statementEndDate;
+            })
+            .reduce((acc, t) => {
+                return t.transactionType === 'income' ? acc + t.totalAmount : acc - t.totalAmount;
+            }, 0);
+          
+          const statementChange = statementData.closingBalance - statementData.openingBalance;
+          const discrepancy = statementChange - ledgerChange;
+
+          setReconResult({
+            statement: statementData,
+            ledgerChange,
+            discrepancy,
+          });
+
+        } else {
+          setReconError(result.error);
+        }
+      } catch (error) {
+        setReconError(error instanceof Error ? error.message : 'Đã có lỗi xảy ra khi đối soát.');
+      } finally {
+        setIsReconciling(false);
+        setReconFile(null); // Reset file after processing
+      }
+    };
+
+    processReconFile();
+  }, [reconFile, transactions]);
 
   // Derived State
   const filteredTransactions = React.useMemo(() => {
+    if (!isClient) return [];
     return transactions
       .filter((t) => {
         const transactionDate = parse(t.date, 'yyyy-MM-dd', new Date());
@@ -234,9 +320,9 @@ export default function TransactionDashboard() {
         return isInDateRange && matchesType && matchesSearch;
       })
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [transactions, searchTerm, filterType, dateRange]);
+  }, [isClient, transactions, searchTerm, filterType, dateRange]);
 
-  const summary = React.useMemo(() => {
+  const periodSummary = React.useMemo(() => {
     return filteredTransactions.reduce(
       (acc, t) => {
         if (t.transactionType === 'income') {
@@ -250,12 +336,37 @@ export default function TransactionDashboard() {
     );
   }, [filteredTransactions]);
 
+  const currentBalance = React.useMemo(() => {
+    if (!isClient) return 0;
+    const openingBalanceDate = companyInfo.openingBalanceDate ? parse(companyInfo.openingBalanceDate, 'yyyy-MM-dd', new Date()) : new Date(0);
+    const netChange = transactions
+      .filter(t => {
+        const tDate = parse(t.date, 'yyyy-MM-dd', new Date());
+        return isValid(tDate) && tDate >= openingBalanceDate;
+      })
+      .reduce((acc, t) => acc + (t.transactionType === 'income' ? t.totalAmount : -t.totalAmount), 0);
+    return (companyInfo.openingBalance || 0) + netChange;
+  }, [isClient, transactions, companyInfo]);
+
   // Handlers
   const handleSaveCompanyInfo = (values: z.infer<typeof companyInfoSchema>) => {
-    setCompanyInfo(values);
+    const newInfo = {
+      ...values,
+      openingBalanceDate: format(values.openingBalanceDate, 'yyyy-MM-dd'),
+    };
+    setCompanyInfo(newInfo);
     setIsCompanyInfoOpen(false);
     toast({ title: 'Thành công', description: 'Đã cập nhật thông tin doanh nghiệp.' });
   };
+  
+  const onReconDialogOpenChange = (open: boolean) => {
+    if (!open) {
+        setReconFile(null);
+        setReconResult(null);
+        setReconError(null);
+    }
+    setIsReconDialogOpen(open);
+  }
 
   const handleOpenFormSheet = (transaction: Transaction | null) => {
     setEditingTransaction(transaction);
@@ -356,7 +467,95 @@ export default function TransactionDashboard() {
           <Logo />
           <h1 className="text-2xl font-bold text-primary">Nhật Ký Thu Chi</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Dialog open={isReconDialogOpen} onOpenChange={onReconDialogOpenChange}>
+            <DialogTrigger asChild>
+              <Button variant="outline">
+                <Banknote className="mr-2 h-4 w-4" /> Đối soát sao kê
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Đối soát sao kê ngân hàng</DialogTitle>
+                <DialogDescription>
+                  Tải lên tệp sao kê của bạn (PDF, ảnh, CSV,...). AI sẽ phân tích và đối chiếu với sổ sách.
+                </DialogDescription>
+              </DialogHeader>
+              {!reconResult && (
+                <div className="py-8 flex flex-col items-center justify-center gap-4 text-center border-2 border-dashed rounded-lg">
+                  {isReconciling ? (
+                    <>
+                      <Loader2 className="h-12 w-12 animate-spin text-primary" />
+                      <p className="font-semibold">AI đang phân tích sao kê...</p>
+                      <p className="text-sm text-muted-foreground">Quá trình này có thể mất một vài phút.</p>
+                    </>
+                  ) : (
+                    <>
+                      <FileUp className="h-12 w-12 text-muted-foreground" />
+                      <Label htmlFor="recon-file-upload" className={cn(buttonVariants(), 'cursor-pointer')}>
+                        Chọn tệp sao kê
+                      </Label>
+                      <input id="recon-file-upload" type="file" className="hidden" onChange={(e) => e.target.files && setReconFile(e.target.files[0])} />
+                      <p className="text-xs text-muted-foreground">Hỗ trợ PDF, PNG, JPG, CSV</p>
+                      {reconError && (
+                         <Alert variant="destructive" className="mt-4 text-left">
+                            <AlertCircle className="h-4 w-4" />
+                            <AlertTitle>Lỗi</AlertTitle>
+                            <AlertDescription>
+                                {reconError}
+                            </AlertDescription>
+                         </Alert>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+              {reconResult && (
+                <div className="space-y-4">
+                   <div className="flex justify-between items-center">
+                    <h3 className="font-semibold text-lg">Kết quả đối soát</h3>
+                    <Badge variant={reconResult.statement.confidenceScore > 0.8 ? 'default' : 'destructive'} className="bg-green-100 text-green-800">
+                      Độ tin cậy: {Math.round(reconResult.statement.confidenceScore * 100)}%
+                    </Badge>
+                   </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <Card>
+                      <CardHeader className="pb-2"><CardTitle className="text-base">Thông tin từ sao kê</CardTitle></CardHeader>
+                      <CardContent className="space-y-1">
+                        <p>Kỳ: {format(parse(reconResult.statement.startDate, 'yyyy-MM-dd', new Date()), 'dd/MM/yy')} - {format(parse(reconResult.statement.endDate, 'yyyy-MM-dd', new Date()), 'dd/MM/yy')}</p>
+                        <p>Số dư đầu: {formatCurrency(reconResult.statement.openingBalance, reconResult.statement.currency)}</p>
+                        <p>Số dư cuối: {formatCurrency(reconResult.statement.closingBalance, reconResult.statement.currency)}</p>
+                        <p className="font-medium">Biến động: {formatCurrency(reconResult.statement.closingBalance - reconResult.statement.openingBalance, reconResult.statement.currency)}</p>
+                      </CardContent>
+                    </Card>
+                     <Card>
+                      <CardHeader className="pb-2"><CardTitle className="text-base">Thông tin từ sổ sách</CardTitle></CardHeader>
+                      <CardContent className="space-y-1">
+                         <p>Kỳ: {format(parse(reconResult.statement.startDate, 'yyyy-MM-dd', new Date()), 'dd/MM/yy')} - {format(parse(reconResult.statement.endDate, 'yyyy-MM-dd', new Date()), 'dd/MM/yy')}</p>
+                        <p>Biến động ròng trong kỳ:</p>
+                        <p className="font-medium">{formatCurrency(reconResult.ledgerChange, reconResult.statement.currency)}</p>
+                      </CardContent>
+                    </Card>
+                  </div>
+                  <Alert variant={reconResult.discrepancy === 0 ? 'default' : 'destructive'} className={reconResult.discrepancy === 0 ? 'bg-green-50 border-green-200' : ''}>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>
+                      {reconResult.discrepancy === 0 ? 'Số liệu khớp!' : 'Phát hiện chênh lệch!'}
+                    </AlertTitle>
+                    <AlertDescription>
+                      {reconResult.discrepancy === 0 
+                        ? 'Biến động trên sao kê khớp với biến động trên sổ sách của bạn.'
+                        : `Chênh lệch: ${formatCurrency(reconResult.discrepancy, reconResult.statement.currency)}.`}
+                    </AlertDescription>
+                  </Alert>
+                   <DialogFooter>
+                      <Button variant="outline" onClick={() => { setReconResult(null); setReconError(null); }}>Đối soát file khác</Button>
+                   </DialogFooter>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
           <input
             type="file"
             id="pdf-upload"
@@ -387,52 +586,45 @@ export default function TransactionDashboard() {
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Thông tin doanh nghiệp</DialogTitle>
+                <DialogTitle>Thông tin doanh nghiệp & Số dư đầu kỳ</DialogTitle>
                 <DialogDescription>
-                  AI sẽ sử dụng thông tin này để xác định giao dịch Thu/Chi.
+                  Cung cấp thông tin để AI và hệ thống hoạt động chính xác.
                 </DialogDescription>
               </DialogHeader>
               <Form {...companyForm}>
                 <form onSubmit={companyForm.handleSubmit(handleSaveCompanyInfo)} className="space-y-4">
-                  <FormField
-                    control={companyForm.control}
-                    name="name"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Tên doanh nghiệp</FormLabel>
-                        <FormControl>
-                          <Input placeholder="Công ty Cổ phần MISA" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={companyForm.control}
-                    name="taxId"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Mã số thuế</FormLabel>
-                        <FormControl>
-                          <Input placeholder="0101243150" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={companyForm.control}
-                    name="abbreviation"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Tên viết tắt</FormLabel>
-                        <FormControl>
-                          <Input placeholder="MISA" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                  <FormField control={companyForm.control} name="name" render={({ field }) => (
+                      <FormItem><FormLabel>Tên doanh nghiệp</FormLabel><FormControl><Input placeholder="Công ty Cổ phần MISA" {...field} /></FormControl><FormMessage /></FormItem>
+                  )}/>
+                  <FormField control={companyForm.control} name="taxId" render={({ field }) => (
+                      <FormItem><FormLabel>Mã số thuế</FormLabel><FormControl><Input placeholder="0101243150" {...field} /></FormControl><FormMessage /></FormItem>
+                  )}/>
+                  <FormField control={companyForm.control} name="abbreviation" render={({ field }) => (
+                      <FormItem><FormLabel>Tên viết tắt</FormLabel><FormControl><Input placeholder="MISA" {...field} /></FormControl><FormMessage /></FormItem>
+                  )}/>
+                  <FormField control={companyForm.control} name="openingBalance" render={({ field }) => (
+                      <FormItem><FormLabel>Số dư đầu kỳ</FormLabel><FormControl><Input type="number" placeholder="0" {...field} /></FormControl><FormMessage /></FormItem>
+                  )}/>
+                  <FormField control={companyForm.control} name="openingBalanceDate" render={({ field }) => (
+                    <FormItem className="flex flex-col">
+                      <FormLabel>Ngày của số dư đầu kỳ</FormLabel>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <FormControl>
+                            <Button variant={"outline"} className={cn("pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
+                              {field.value ? format(field.value, "dd/MM/yyyy") : <span>Chọn ngày</span>}
+                              <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                            </Button>
+                          </FormControl>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar mode="single" selected={field.value} onSelect={field.onChange} initialFocus locale={vi}/>
+                        </PopoverContent>
+                      </Popover>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
                   <DialogFooter>
                     <Button type="submit">Lưu thay đổi</Button>
                   </DialogFooter>
@@ -447,12 +639,12 @@ export default function TransactionDashboard() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Tổng thu</CardTitle>
+            <CardTitle className="text-sm font-medium">Tổng thu (trong kỳ)</CardTitle>
             <span className="text-green-500">▲</span>
           </CardHeader>
           <CardContent>
             {isClient ? (
-              <div className="text-2xl font-bold">{formatCurrency(summary.totalIncome)}</div>
+              <div className="text-2xl font-bold">{formatCurrency(periodSummary.totalIncome)}</div>
             ) : (
               <Skeleton className="h-8 w-3/4" />
             )}
@@ -460,12 +652,12 @@ export default function TransactionDashboard() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Tổng chi</CardTitle>
+            <CardTitle className="text-sm font-medium">Tổng chi (trong kỳ)</CardTitle>
             <span className="text-red-500">▼</span>
           </CardHeader>
           <CardContent>
             {isClient ? (
-              <div className="text-2xl font-bold">{formatCurrency(summary.totalExpense)}</div>
+              <div className="text-2xl font-bold">{formatCurrency(periodSummary.totalExpense)}</div>
             ) : (
               <Skeleton className="h-8 w-3/4" />
             )}
@@ -473,12 +665,12 @@ export default function TransactionDashboard() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Chênh lệch</CardTitle>
+            <CardTitle className="text-sm font-medium">Số dư hiện tại</CardTitle>
             <span className="text-muted-foreground">=</span>
           </CardHeader>
           <CardContent>
             {isClient ? (
-              <div className="text-2xl font-bold">{formatCurrency(summary.totalIncome - summary.totalExpense)}</div>
+              <div className="text-2xl font-bold">{formatCurrency(currentBalance)}</div>
             ) : (
               <Skeleton className="h-8 w-3/4" />
             )}

@@ -15,6 +15,8 @@ export type CompanyInfo = {
   name: string;
   taxId: string;
   abbreviation: string;
+  openingBalance: number;
+  openingBalanceDate: string; // YYYY-MM-DD
 };
 
 export type ExtractedData = {
@@ -27,4 +29,21 @@ export type ExtractedData = {
   subtotal: number;
   pdfDataUri: string;
   notes?: string;
+};
+
+export type StatementTransaction = {
+  date: string;
+  description: string;
+  amount: number;
+  type: 'debit' | 'credit';
+};
+
+export type ExtractedStatementData = {
+  startDate: string;
+  endDate: string;
+  openingBalance: number;
+  closingBalance: number;
+  transactions: StatementTransaction[];
+  currency: string;
+  confidenceScore: number;
 };
