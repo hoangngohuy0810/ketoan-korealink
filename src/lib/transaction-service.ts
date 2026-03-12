@@ -6,7 +6,7 @@ import {
   deleteDoc, 
   doc, 
   query, 
-  orderBy,
+  where,
   updateDoc,
   serverTimestamp
 } from 'firebase/firestore';
@@ -20,24 +20,37 @@ import { Transaction } from '@/app/lib/definitions';
 
 const TRANSACTIONS_COLLECTION = 'transactions';
 
-export async function saveTransaction(transaction: Omit<Transaction, 'id'>, pdfDataUri?: string) {
+// Firestore does not accept `undefined` values — strip them before saving
+function removeUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v !== undefined)
+  ) as Partial<T>;
+}
+
+export async function saveTransaction(userId: string, transaction: Omit<Transaction, 'id'>, pdfDataUri?: string) {
   let fileUrl = '';
   
   if (pdfDataUri && pdfDataUri.startsWith('data:')) {
-    const fileId = `${Date.now()}_invoice.pdf`;
-    const storageRef = ref(storage, `invoices/${fileId}`);
-    
-    // Upload the data URI to Firebase Storage
-    await uploadString(storageRef, pdfDataUri, 'data_url');
-    fileUrl = await getDownloadURL(storageRef);
+    try {
+      const fileId = `${Date.now()}_invoice.pdf`;
+      const storageRef = ref(storage, `invoices/${userId}/${fileId}`);
+      await uploadString(storageRef, pdfDataUri, 'data_url');
+      fileUrl = await getDownloadURL(storageRef);
+    } catch (storageError) {
+      console.warn('Storage upload failed, saving transaction without PDF attachment:', storageError);
+      // Continue saving to Firestore even if Storage upload fails
+    }
   }
 
-  const docRef = await addDoc(collection(db, TRANSACTIONS_COLLECTION), {
-    ...transaction,
-    pdfUrl: fileUrl,
-    pdfDataUri: null, // Don't store huge base64 in Firestore
-    createdAt: serverTimestamp(),
-  });
+  const docRef = await addDoc(collection(db, TRANSACTIONS_COLLECTION),
+    removeUndefined({
+      ...transaction,
+      userId,
+      pdfUrl: fileUrl,
+      pdfDataUri: null, // Don't store huge base64 in Firestore
+      createdAt: serverTimestamp(),
+    } as Record<string, unknown>)
+  );
 
   return docRef.id;
 }
@@ -54,18 +67,20 @@ export async function updateTransaction(id: string, updates: Partial<Transaction
     pdfUpdate = { pdfUrl: fileUrl, pdfDataUri: null };
   }
 
-  await updateDoc(docRef, {
-    ...updates,
-    ...pdfUpdate,
-    updatedAt: serverTimestamp(),
-  });
+  await updateDoc(docRef,
+    removeUndefined({
+      ...updates,
+      ...pdfUpdate,
+      updatedAt: serverTimestamp(),
+    } as Record<string, unknown>)
+  );
 }
 
-export async function getTransactions(): Promise<Transaction[]> {
-  const q = query(collection(db, TRANSACTIONS_COLLECTION), orderBy('date', 'desc'));
+export async function getTransactions(userId: string): Promise<Transaction[]> {
+  const q = query(collection(db, TRANSACTIONS_COLLECTION), where('userId', '==', userId));
   const querySnapshot = await getDocs(q);
   
-  return querySnapshot.docs.map(doc => {
+  const transactions = querySnapshot.docs.map(doc => {
     const data = doc.data();
     return {
       ...data,
@@ -74,10 +89,15 @@ export async function getTransactions(): Promise<Transaction[]> {
       pdfDataUri: data.pdfUrl || data.pdfDataUri, 
     } as Transaction;
   });
+
+  // Sort by date descending (to avoid requiring a composite index in Firestore)
+  transactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return transactions;
 }
 
-export async function resetLedger() {
-  const querySnapshot = await getDocs(collection(db, TRANSACTIONS_COLLECTION));
+export async function resetLedger(userId: string) {
+  const q = query(collection(db, TRANSACTIONS_COLLECTION), where('userId', '==', userId));
+  const querySnapshot = await getDocs(q);
   
   const deletePromises = querySnapshot.docs.map(async (document) => {
     const data = document.data();

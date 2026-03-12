@@ -12,11 +12,14 @@ import {
   FileUp,
   Filter,
   Loader2,
+  LogIn,
+  LogOut,
   Plus,
   Search,
   Settings,
   Trash2,
   UploadCloud,
+  User as UserIcon,
   X,
 } from 'lucide-react';
 import { useLocalStorage } from '@/hooks/use-local-storage';
@@ -36,6 +39,8 @@ import {
   updateTransaction, 
   resetLedger 
 } from '@/lib/transaction-service';
+import { auth, googleProvider } from '@/lib/firebase';
+import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
@@ -109,6 +114,8 @@ export default function TransactionDashboard() {
   const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo>(FIXED_COMPANY_INFO);
   const [transactions, setTransactions] = React.useState<Transaction[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [user, setUser] = React.useState<FirebaseUser | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = React.useState(true);
 
   // State
   const [isClient, setIsClient] = React.useState(false);
@@ -163,12 +170,18 @@ export default function TransactionDashboard() {
 
   React.useEffect(() => {
     setIsClient(true);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsAuthLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
   
   React.useEffect(() => {
     async function loadData() {
+      if (!user) return;
       try {
-        const data = await getTransactions();
+        const data = await getTransactions(user.uid);
         setTransactions(data);
       } catch (error) {
         console.error('Error loading transactions:', error);
@@ -177,10 +190,10 @@ export default function TransactionDashboard() {
         setLoading(false);
       }
     }
-    if (isClient) {
+    if (isClient && user) {
       loadData();
     }
-  }, [isClient, toast]);
+  }, [isClient, user, toast]);
 
   React.useEffect(() => {
     if (isClient) {
@@ -413,9 +426,10 @@ export default function TransactionDashboard() {
   };
 
   const handleResetLedger = async () => {
+    if (!user) return;
     setIsProcessing(true);
     try {
-      await resetLedger();
+      await resetLedger(user.uid);
       setTransactions([]);
       toast({ title: 'Hoàn tất', description: 'Toàn bộ sổ sách và hóa đơn đã được xóa khỏi hệ thống.' });
       setIsCompanyInfoOpen(false);
@@ -426,6 +440,26 @@ export default function TransactionDashboard() {
     }
   };
   
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      toast({ title: 'Thành công', description: 'Đăng nhập thành công.' });
+    } catch (error) {
+      console.error('Login error:', error);
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể đăng nhập.' });
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      toast({ title: 'Thành công', description: 'Đã đăng xuất.' });
+    } catch (error) {
+      console.error('Logout error:', error);
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể đăng xuất.' });
+    }
+  };
+
   const onReconDialogOpenChange = (open: boolean) => {
     if (!open) {
         setReconFile(null);
@@ -469,7 +503,7 @@ export default function TransactionDashboard() {
           await updateTransaction(values.id!, updates, values.pdfDataUri);
           
           // Refresh local state
-          const updatedData = await getTransactions();
+          const updatedData = await getTransactions(user!.uid);
           setTransactions(updatedData);
           toast({ title: 'Thành công', description: 'Đã cập nhật giao dịch.' });
       } else {
@@ -485,8 +519,8 @@ export default function TransactionDashboard() {
             items: [],
             currency: 'VND',
           };
-          await saveTransaction(newTransaction, values.pdfDataUri);
-          const updatedData = await getTransactions();
+          await saveTransaction(user!.uid, newTransaction, values.pdfDataUri);
+          const updatedData = await getTransactions(user!.uid);
           setTransactions(updatedData);
           toast({ title: 'Thành công', description: 'Đã thêm giao dịch mới.' });
       }
@@ -524,8 +558,8 @@ export default function TransactionDashboard() {
         recipientName: extractedData.recipientName,
       };
       
-      await saveTransaction(newTransaction, values.pdfDataUri);
-      const updatedData = await getTransactions();
+      await saveTransaction(user!.uid, newTransaction, values.pdfDataUri);
+      const updatedData = await getTransactions(user!.uid);
       setTransactions(updatedData);
       
       toast({ title: 'Thành công', description: 'Đã lưu giao dịch từ hoá đơn.' });
@@ -533,7 +567,9 @@ export default function TransactionDashboard() {
       setExtractedData(null);
       setValidationIssues([]);
     } catch (error) {
-      toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể lưu dữ liệu trích xuất.' });
+      console.error('handleConfirmExtraction error:', error);
+      const msg = error instanceof Error ? error.message : 'Lỗi không xác định';
+      toast({ variant: 'destructive', title: 'Lỗi lưu giao dịch', description: msg });
     } finally {
       setIsProcessing(false);
     }
@@ -550,6 +586,34 @@ export default function TransactionDashboard() {
     e.preventDefault();
     e.stopPropagation();
   };
+
+  if (isAuthLoading) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50/50 p-4">
+        <div className="w-full max-w-md space-y-8 text-center bg-white p-8 rounded-2xl shadow-xl">
+          <div className="flex flex-col items-center gap-3">
+            <Logo />
+            <h1 className="text-3xl font-bold tracking-tight text-primary">Nhật Ký Thu Chi</h1>
+            <p className="text-muted-foreground">Quản lý tài chính doanh nghiệp thông minh với AI</p>
+          </div>
+          <div className="py-6 border-t border-b border-gray-100">
+            <h2 className="text-lg font-semibold mb-4 text-gray-800">Đăng nhập để tiếp tục</h2>
+            <Button size="lg" className="w-full h-12 text-base shadow-md hover:shadow-lg transition-transform hover:-translate-y-0.5" onClick={handleLogin}>
+              <LogIn className="mr-2 h-5 w-5" /> Đăng nhập bằng Google
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -781,6 +845,27 @@ export default function TransactionDashboard() {
               </div>
             </DialogContent>
           </Dialog>
+          {user ? (
+            <div className="flex items-center gap-2 pl-4 border-l">
+              <div className="flex items-center gap-2">
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt="Avatar" className="w-8 h-8 rounded-full border border-border" />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center border border-border">
+                    <UserIcon className="w-4 h-4 text-primary" />
+                  </div>
+                )}
+                <span className="text-sm font-medium hidden sm:inline-block max-w-[120px] truncate">{user.displayName || user.email}</span>
+              </div>
+              <Button variant="ghost" size="icon" onClick={handleLogout} title="Đăng xuất">
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <Button variant="default" className="ml-2" onClick={handleLogin}>
+              <LogIn className="mr-2 h-4 w-4" /> Đăng nhập
+            </Button>
+          )}
         </div>
       </header>
       
