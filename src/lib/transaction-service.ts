@@ -55,13 +55,13 @@ export async function saveTransaction(userId: string, transaction: Omit<Transact
   return docRef.id;
 }
 
-export async function updateTransaction(id: string, updates: Partial<Transaction>, pdfDataUri?: string) {
+export async function updateTransaction(userId: string, id: string, updates: Partial<Transaction>, pdfDataUri?: string) {
   const docRef = doc(db, TRANSACTIONS_COLLECTION, id);
   
   let pdfUpdate = {};
   if (pdfDataUri && pdfDataUri.startsWith('data:')) {
     const fileId = `${Date.now()}_invoice.pdf`;
-    const storageRef = ref(storage, `invoices/${fileId}`);
+    const storageRef = ref(storage, `invoices/${userId}/${fileId}`);
     await uploadString(storageRef, pdfDataUri, 'data_url');
     const fileUrl = await getDownloadURL(storageRef);
     pdfUpdate = { pdfUrl: fileUrl, pdfDataUri: null };

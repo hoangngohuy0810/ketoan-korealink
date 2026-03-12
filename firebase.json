@@ -1,4 +1,13 @@
 {
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": [
+    {
+      "bucket": "ketoan-korealink.firebasestorage.app",
+      "rules": "storage.rules"
+    }
+  ],
   "hosting": {
     "source": ".",
     "ignore": [

@@ -500,7 +500,7 @@ export default function TransactionDashboard() {
             ...values,
             date: format(values.date, 'yyyy-MM-dd'),
           };
-          await updateTransaction(values.id!, updates, values.pdfDataUri);
+          await updateTransaction(user!.uid, values.id!, updates, values.pdfDataUri);
           
           // Refresh local state
           const updatedData = await getTransactions(user!.uid);
