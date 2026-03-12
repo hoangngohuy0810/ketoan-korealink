@@ -25,3 +25,6 @@ env:
   - variable: NEXT_PUBLIC_FIREBASE_APP_ID
     value: 1:60146467803:web:d1214caf4590a9f6d85dfe
     availability: [BUILD, RUNTIME]
+  - variable: GEMINI_API_KEY
+    secret: GEMINI_API_KEY
+    availability: [RUNTIME]

@@ -6,7 +6,7 @@ import { extractStatementData, type ExtractStatementDataInput, type ExtractState
 import { z } from 'zod';
 
 const ExtractActionSchema = z.object({
-  pdfDataUri: z.string().startsWith('data:application/pdf;base64,'),
+  pdfDataUri: z.string().startsWith('data:'),
 });
 
 export async function extractInvoiceAction(

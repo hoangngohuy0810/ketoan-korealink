@@ -106,7 +106,7 @@ type SortableColumn = 'date' | 'invoiceNumber' | 'counterpartyName' | 'netAmount
 
 export default function TransactionDashboard() {
   const { toast } = useToast();
-  const [companyInfo] = React.useState<CompanyInfo>(FIXED_COMPANY_INFO);
+  const [companyInfo, setCompanyInfo] = React.useState<CompanyInfo>(FIXED_COMPANY_INFO);
   const [transactions, setTransactions] = React.useState<Transaction[]>([]);
   const [loading, setLoading] = React.useState(true);
 
@@ -225,7 +225,7 @@ export default function TransactionDashboard() {
               totalAmount: aiData.totalAmount,
               vatAmount: aiData.taxAmount,
               netAmount: aiData.subtotal,
-              transactionType: transactionType,
+              transactionType: transactionType as 'income' | 'expense',
             };
 
             const validationResult = await validateTransactionAction(validationInput);
@@ -702,7 +702,7 @@ export default function TransactionDashboard() {
                 <Settings className="h-5 w-5" />
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="flex flex-col max-h-[90vh] sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Thông tin doanh nghiệp & Số dư đầu kỳ</DialogTitle>
                 <DialogDescription>
@@ -710,45 +710,54 @@ export default function TransactionDashboard() {
                 </DialogDescription>
               </DialogHeader>
               <Form {...companyForm}>
-                <form onSubmit={companyForm.handleSubmit(handleSaveCompanyInfo)} className="space-y-4">
-                  <FormField control={companyForm.control} name="name" render={({ field }) => (
-                      <FormItem><FormLabel>Tên doanh nghiệp</FormLabel><FormControl><Input placeholder="Công ty Cổ phần MISA" {...field} /></FormControl><FormMessage /></FormItem>
-                  )}/>
-                  <FormField control={companyForm.control} name="taxId" render={({ field }) => (
-                      <FormItem><FormLabel>Mã số thuế</FormLabel><FormControl><Input placeholder="0101243150" {...field} /></FormControl><FormMessage /></FormItem>
-                  )}/>
-                  <FormField control={companyForm.control} name="abbreviation" render={({ field }) => (
-                      <FormItem><FormLabel>Tên viết tắt</FormLabel><FormControl><Input placeholder="MISA" {...field} /></FormControl><FormMessage /></FormItem>
-                  )}/>
-                  <FormField control={companyForm.control} name="openingBalance" render={({ field }) => (
-                      <FormItem><FormLabel>Số dư đầu kỳ</FormLabel><FormControl><Input type="number" placeholder="0" {...field} /></FormControl><FormMessage /></FormItem>
-                  )}/>
-                  <FormField control={companyForm.control} name="openingBalanceDate" render={({ field }) => (
-                    <FormItem className="flex flex-col">
-                      <FormLabel>Ngày của số dư đầu kỳ</FormLabel>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <FormControl>
-                            <Button variant={"outline"} className={cn("pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
-                              {field.value ? format(field.value, "dd/MM/yyyy") : <span>Chọn ngày</span>}
-                              <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                            </Button>
-                          </FormControl>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar mode="single" selected={field.value} onSelect={field.onChange} initialFocus locale={vi}/>
-                        </PopoverContent>
-                      </Popover>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                  <DialogFooter>
-                    <Button type="submit">Lưu thay đổi</Button>
-                  </DialogFooter>
+                <form onSubmit={companyForm.handleSubmit(handleSaveCompanyInfo)} className="flex flex-col min-h-0 flex-1">
+                  {/* Scrollable content area */}
+                  <div className="overflow-y-auto flex-1 pr-1 space-y-4">
+                    <FormField control={companyForm.control} name="name" render={({ field }) => (
+                        <FormItem><FormLabel>Tên doanh nghiệp</FormLabel><FormControl><Input placeholder="Công ty Cổ phần MISA" {...field} /></FormControl><FormMessage /></FormItem>
+                    )}/>
+                    <FormField control={companyForm.control} name="taxId" render={({ field }) => (
+                        <FormItem><FormLabel>Mã số thuế</FormLabel><FormControl><Input placeholder="0101243150" {...field} /></FormControl><FormMessage /></FormItem>
+                    )}/>
+                    <FormField control={companyForm.control} name="abbreviation" render={({ field }) => (
+                        <FormItem><FormLabel>Tên viết tắt</FormLabel><FormControl><Input placeholder="MISA" {...field} /></FormControl><FormMessage /></FormItem>
+                    )}/>
+                    <FormField control={companyForm.control} name="openingBalance" render={({ field }) => (
+                        <FormItem><FormLabel>Số dư đầu kỳ</FormLabel><FormControl><Input type="number" placeholder="0" {...field} /></FormControl><FormMessage /></FormItem>
+                    )}/>
+                    <FormField control={companyForm.control} name="openingBalanceDate" render={({ field }) => (
+                      <FormItem className="flex flex-col">
+                        <FormLabel>Ngày của số dư đầu kỳ</FormLabel>
+                        <FormControl>
+                          <div className="flex items-center gap-2 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                            <CalendarIcon className="h-4 w-4 opacity-50 shrink-0" />
+                            <span className="flex-1">
+                              {field.value ? format(field.value, "dd/MM/yyyy") : <span className="text-muted-foreground">Chưa chọn ngày</span>}
+                            </span>
+                          </div>
+                        </FormControl>
+                        <div className="rounded-md border">
+                          <Calendar
+                            mode="single"
+                            selected={field.value}
+                            onSelect={(date) => field.onChange(date)}
+                            locale={vi}
+                            className="w-full"
+                          />
+                        </div>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  </div>
+                  {/* Fixed footer inside form */}
+                  <div className="pt-4 border-t mt-4 shrink-0">
+                    <Button type="submit" className="w-full">Lưu thay đổi</Button>
+                  </div>
                 </form>
               </Form>
-              <div className="border-t pt-6 mt-6">
+              {/* Reset section - fixed at bottom */}
+              <div className="border-t pt-4 shrink-0">
                 <AlertDialog>
                     <AlertDialogTrigger asChild>
                         <Button variant="destructive" className="w-full">
