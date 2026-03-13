@@ -21,7 +21,7 @@ import { Transaction } from '@/app/lib/definitions';
 const TRANSACTIONS_COLLECTION = 'transactions';
 
 // Firestore does not accept `undefined` values — strip them before saving
-function removeUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+function removeUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(obj).filter(([, v]) => v !== undefined)
   ) as Partial<T>;
@@ -49,7 +49,7 @@ export async function saveTransaction(userId: string, transaction: Omit<Transact
       pdfUrl: fileUrl,
       pdfDataUri: null, // Don't store huge base64 in Firestore
       createdAt: serverTimestamp(),
-    } as Record<string, unknown>)
+    } as Record<string, any>)
   );
 
   return docRef.id;
@@ -72,7 +72,7 @@ export async function updateTransaction(userId: string, id: string, updates: Par
       ...updates,
       ...pdfUpdate,
       updatedAt: serverTimestamp(),
-    } as Record<string, unknown>)
+    } as Record<string, any>)
   );
 }
 
@@ -117,4 +117,17 @@ export async function resetLedger(userId: string) {
   });
 
   await Promise.all(deletePromises);
+}
+
+export async function deleteTransaction(userId: string, transactionId: string, fileUrl?: string) {
+  if (fileUrl && fileUrl.startsWith('http')) {
+    try {
+      const fileRef = ref(storage, fileUrl);
+      await deleteObject(fileRef);
+    } catch (e) {
+      console.error('Error deleting file:', e);
+    }
+  }
+
+  await deleteDoc(doc(db, TRANSACTIONS_COLLECTION, transactionId));
 }

@@ -37,6 +37,7 @@ import {
   getTransactions, 
   saveTransaction, 
   updateTransaction, 
+  deleteTransaction,
   resetLedger 
 } from '@/lib/transaction-service';
 import { auth, googleProvider } from '@/lib/firebase';
@@ -527,6 +528,22 @@ export default function TransactionDashboard() {
       setIsFormSheetOpen(false);
     } catch (error) {
       toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể lưu giao dịch.' });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDeleteTransaction = async (id: string, pdfUrl?: string) => {
+    if (!user) return;
+    setIsProcessing(true);
+    try {
+      await deleteTransaction(user.uid, id, pdfUrl);
+      const updatedData = await getTransactions(user.uid);
+      setTransactions(updatedData);
+      toast({ title: 'Thành công', description: 'Đã xoá giao dịch.' });
+      setIsFormSheetOpen(false);
+    } catch (error) {
+       toast({ variant: 'destructive', title: 'Lỗi', description: 'Không thể xoá giao dịch.' });
     } finally {
       setIsProcessing(false);
     }
@@ -1233,8 +1250,29 @@ export default function TransactionDashboard() {
                   </Accordion>
                 )}
               </div>
-              <SheetFooter className="pt-4">
-                <SheetClose asChild><Button type="button" variant="outline">Huỷ</Button></SheetClose>
+              <SheetFooter className="pt-4 flex justify-between w-full sm:justify-between">
+                <div className="flex gap-2">
+                  <SheetClose asChild><Button type="button" variant="outline">Huỷ</Button></SheetClose>
+                  {editingTransaction && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button type="button" variant="destructive">Xóa</Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Xóa giao dịch này?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Giao dịch này và file hoá đơn đính kèm (nếu có) sẽ bị xoá vĩnh viễn khỏi hệ thống.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Huỷ</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => handleDeleteTransaction(editingTransaction.id!, editingTransaction.pdfDataUri)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Xóa</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </div>
                 <Button type="submit">Lưu</Button>
               </SheetFooter>
             </form>
