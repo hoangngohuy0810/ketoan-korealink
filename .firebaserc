@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "ketoan-korealink"
-  }
+    "default": "ketoan-korealink",
+    ".firebaserc": "ketoan-korealink"
+  },
+  "targets": {},
+  "etags": {}
 }
